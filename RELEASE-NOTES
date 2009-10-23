@@ -1,0 +1,200 @@
+*************
+version 1.0.9
+*************
+
+fixed auto-reconnect to mark the datasource as closed when auto-reconnect 
+fails; otherwise a crash can occur when the datasource is reused
+
+
+*************
+version 1.0.8
+*************
+
+when compiled with qore module API 0.7 or greater (qore >= 0.7.5), the module
+supports making direct connections without TNS by using the hostname and port
+set in the Datasource or DatasourcePool object
+
+updated query parsing for '%*' placeholders to ignore '%' characters when they
+are preceded by an alphanumeric character in order to avoid having to use
+backslashes to escape them in PL/SQL code, for example
+
+
+*************
+version 1.0.7
+*************
+
+updated to allow input and output variables to be bound for stored procedure
+and function calls for types: string, binary, integer, float, date
+
+fixed binary binding and retrieving in stored procedure and function calls
+
+fixed backquoting ':' characters
+
+
+*************
+version 1.0.6
+*************
+
+updated to allow result sets and nested tables, etc to be returned directly
+fixed a bug calculating memory for character buffers; memory was calculated as
+the square of the memory actually needed
+
+
+*************
+version 1.0.5
+*************
+
+fixed a bug raising invalid handle exceptions; the exception description
+contained a random series of bytes instead of string data
+
+
+*************
+version 1.0.4
+*************
+
+updated configure to check the directory specified with --prefix first when
+looking for dependent libraries
+
+fixed instant client detection from 32-bit RPMs (again)
+
+
+*************
+version 1.0.3
+*************
+
+* made default to use SQLT_FLT bindings because using SQLT_BDOUBLE with Oracle
+  9i or earlier will not work
+
+
+*************
+version 1.0.2
+*************
+
+* fixed detection of Oracle instant client installed from 32-bit RPMs
+
+
+*************
+version 1.0.1
+*************
+
+* fixed compilation with Oracle 9i
+* fixed setting buffer sizes for retrieving SQLT_STR data when the server's
+  character encoding uses a smaller maximum number of bytes per character than
+  the encoding for the connection
+
+
+***********
+version 1.0
+***********
+
+* implemented auto-reconnect for the Oracle driver; if the connection
+  disappears while not in a transaction, then the driver will automatically
+  and transparently try to reconnect the connection
+
+
+- all earlier versions were bundled with the qore library
+
+
+**********
+Qore 0.6.2
+**********
+
+added support for the following types:
+TIMESTAMP* types
+INTERVAL* types
+BINARY_FLOAT
+BINARY_DOUBLE
+UNSIGNED INT
+RAW
+LONG RAW
+
+Qore date/time types are now bound as TIMESTAMP value to preseve milliseconds
+when possible (for both binding by value and binding by placeh
+older).  Milliseconds are preserved in all TIMESTAMP* and INTERVAL DAY TO
+SECOND types.
+
+Timezone information is discarded when converting from Oracle types to Qore
+types, as Qore's date/time type does not yet support timezone information.
+
+
+**********
+Qore 0.5.2
+**********
+
+the select() and selectRows() methods both support binding data directly in
+queries with the same syntax as with exec(), for example:
+
+my $result = $oradb.select("select * from table where value = %v", $value);
+
+
+**********
+Qore 0.5.1
+**********
+
+Oracle driver fixed to not throw parse exceptions when the ":" character is
+not followed by an alphabetic character 
+
+so ":=" is legal in SQL statements again :-)
+
+
+**********
+Qore 0.5.0
+**********
+
+there is a new DB-independent Datasource::exec() syntax (although so far only
+the Oracle driver has been modified to support it).  In Oracle *LOB columns
+are supported for binding and passing values through ::exec().  The syntax is
+somewhat similar to *printf() except %v is used for all value types:
+For example, to bind values in a generic SQL statement:
+$ds.exec("insert into table values ( %v, %v, %v, %v, %v, %v )", binary($data),
+"string", 12345, True, now(), 1.43);
+for Oracle, values are bound as follows:
+        Type::Binary   = SQLT_BIN  (can be a BLOB for example)
+        Type::String   = SQLT_STR
+        Type::Integer  = SQLT_INT or SQLT_STR  (int > 32-bits = SQLT_STR, <=
+	32-bit int = SQLT_INT)
+        Type::Boolean  = SQLT_INT  (1 or 0)
+        Type::Float    = SQLT_FLT
+        Type::Date     = SQLT_DAT
+
+attempts to bind other types will result in a run-time exception.
+
+To retrieve values from a stored procedure or function, you must specify
+placeholder with a syntax more similar to Oracle's as follows:
+$hash = $ds.exec(begin stored_procedure_name('Literal String', :param1,
+:param2, param3); end;");
+
+The placeholders are the :param* elements in the string, and will correspond
+to the keys in the result hash (without the leading ':' character).  If no
+types are defined by arguments following the string, then they default to
+strings with a maximum length of 512 bytes.  To retrieve other types or longer
+string values using placeholders, you have to include arguments after the
+string, one argument for each placeholder.  The arguments should be the data
+type for the bind as follows:
+        Type::Binary  = BLOB
+        "clob"        = CLOB
+        Type::String  = SQLT_STR
+        Type::Integer = SQLT_INT  (returns a 32 bit integer)
+        Type::Float   = SQLT_FLT
+        Type::Date    = SQLT_DAT
+        Type::Hash    = SQLT_RSET (for result sets, stored procs that return
+	cursors, etc)
+
+This new syntax is meant to be driver-independent, so, for example, when the
+MySQL driver is updated to take advantage of MySQL 5.0 features like stored
+procedure execution, support for this syntax will be implemented as well.
+
+
+**********
+Qore 0.4.2
+**********
+
+the 128K limit for CLOBs is now gone and BLOBs will now be selected as binary
+objects.  However I have found what I believe is a bug in Oracle 9i where even
+if you are trying to stream CLOB data you have to allocate a buffer bigger
+than the CLOB you are trying to stream or you will get an "ORA-24812:
+character set conversion to or from UCS2 failed" error (I saw this on Saolaris
+with a 9i client and 9i server), to change the buffer size in
+modules/oracle/oracle.h with the LOB_BLOCK_SIZE define (currently it's set at
+32K as a compromise - not ideal for working streaming like with 10g, but
+medium large for the broken versions...)

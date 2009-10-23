@@ -1,0 +1,28 @@
+db2 module for Qore
+version 0.0.1 by
+
+Requires qore 0.7.6 and db2 headers and libraries to build
+
+The "db2" DBI driver is 
+
+The driver's name is "db2" and the Datasource type constant is SQL::DSDB2
+ex: $db = new Datasource(DSDB2);
+ex: $db = new Datasource("oracle");
+
+Documentation in docs/db2-module-doc.html
+
+test/example script: test/db-test.q
+
+
+BUILD AND INSTALL
+-----------------
+
+
+
+BUILD FROM SVN
+--------------
+
+reconf.sh
+configure
+make
+sudo make install
