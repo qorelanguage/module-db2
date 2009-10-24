@@ -69,6 +69,55 @@ static const char *this_user = 0;
 
 //class QoreDB2Handle {};
 
+class QoreDB2Column {
+protected:
+   int col_no;
+   SQLSMALLINT colType;
+   SQLUINTEGER colSize;
+   SQLSMALLINT colScale;
+   SQLINTEGER ind;
+   std::string cname;
+   union bind_buf_u {
+      char *cstr;
+   } buf;
+
+public:
+   DLLLOCAL QoreDB2Column() {}
+   DLLLOCAL ~QoreDB2Column();
+   DLLLOCAL int describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int cnbufsize, ExceptionSink *xsink);
+
+   DLLLOCAL const char *getName() const { return cname.c_str(); }
+   DLLLOCAL SQLSMALLINT getType() const { return colType; }
+   DLLLOCAL SQLSMALLINT getSize() const { return colSize; }
+   DLLLOCAL AbstractQoreNode *getValue(ExceptionSink *xsink) const;
+};
+
+class QoreDB2ColumnList : public QoreDB2Column {
+private:
+   QoreListNode *l;
+
+public:
+   DLLLOCAL QoreDB2ColumnList() : l(0) {}
+   DLLLOCAL ~QoreDB2ColumnList() {
+      if (l)
+	 l->deref(0);
+   }
+   DLLLOCAL int doValue(ExceptionSink *xsink) {
+      if (!l)
+	 l = new QoreListNode();	 
+      l->push(getValue(xsink));
+      return *xsink ? -1 : 0;
+   }
+   DLLLOCAL QoreListNode *takeList() {
+      QoreListNode *rv = l;
+      l = 0;
+      return rv;
+   }
+   DLLLOCAL qore_size_t size() const {
+      return l ? l->size() : 0;
+   }
+};
+
 class QoreDB2 {
 private:
    SQLHANDLE henv, hdbc;
@@ -188,21 +237,40 @@ public:
 
       printd(0, "QoreDB2::select() query returned %d columns\n", (int)cols);
 
+      if (!cols)
+	 return 0;
+
+      // column name buffer
+      char cname[QORE_DB2_MAX_COL_NAME_LEN + 1];
+      QoreDB2ColumnList columns[cols];
+
+      // bind all columns
       for (int i = 0; i < cols; ++i) {
-	 SQLSMALLINT colNameLen;
-	 SQLSMALLINT colType;
-	 SQLUINTEGER colSize;
-	 SQLSMALLINT colScale;
-	 char cname[QORE_DB2_MAX_COL_NAME_LEN + 1];
-
-	 rc = SQLDescribeCol(hstmt, (SQLSMALLINT)(i + 1), (SQLCHAR*)cname, sizeof(cname), &colNameLen, &colType, &colSize, &colScale, 0);
-	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLDescribeCol()", xsink))
+	 if (columns[i].describeAndBind(hstmt, i, cname, QORE_DB2_MAX_COL_NAME_LEN + 1, xsink))
 	    return 0;
-
-	 printd(0, "column %d/%d: %s: type=%d size=%d scale=%d\n", i, cols, cname, colType, colSize, colScale);
       }
 
-      return 0;
+      while (true) {
+	 rc = SQLFetch(hstmt);
+	 if (rc == SQL_NO_DATA_FOUND)
+	    break;
+
+	 for (int i = 0; i < cols; ++i) {
+	    if (columns[i].doValue(xsink))
+	       return 0;
+	 }
+      }
+
+      if (!columns[0].size())
+	 return 0;
+
+      // return hash of lists
+      QoreHashNode *h = new QoreHashNode();
+      for (int i = 0; i < cols; ++i) {
+	 h->setKeyValue(columns[i].getName(), columns[i].takeList(), xsink);
+      }
+
+      return h;
    }
 
    DLLLOCAL AbstractQoreNode *exec(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
@@ -244,6 +312,57 @@ public:
       return -1;
    }
 };
+
+AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
+   if (ind == SQL_NULL_DATA)
+      return null();
+
+   switch (colType) {
+   }
+
+   // default: handle as string
+   // FIXME: set encoding
+   return new QoreStringNode(buf.cstr);
+}
+
+int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int cnbufsize, ExceptionSink *xsink) {
+   SQLSMALLINT colNameLen;
+   SQLRETURN rc = SQLDescribeCol(hstmt, (SQLSMALLINT)(col_no + 1), (SQLCHAR*)cnbuf, cnbufsize, &colNameLen, &colType, &colSize, &colScale, 0);
+   if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLDescribeCol()", xsink))
+      return -1;
+   
+   // make column name lower case
+   strtolower(cnbuf);
+
+   // save a copy of the column name
+   cname = cnbuf;
+
+   switch (colType) {
+      // default: handle as string
+      default: {
+	 buf.cstr = (char *)malloc(sizeof(char) * (colSize + 1));
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_CHAR, buf.cstr, colSize + 1, &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+      }
+   }
+
+   printd(0, "QoreDB2Column::describeAndBind() col %d: %s type %d size %d\n", col_no, cnbuf, colType, colSize);
+   return 0;
+}
+
+QoreDB2Column::~QoreDB2Column() {
+   // we have data to delete
+   if (!cname.empty()) {
+      switch (colType) {
+	 // default: string data
+	 default: {
+	    if (buf.cstr)
+	       free(buf.cstr);
+	 }
+      }
+   }
+}
 
 static AbstractQoreNode *db2_exec(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
    return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->exec(*qstr, args, xsink);
