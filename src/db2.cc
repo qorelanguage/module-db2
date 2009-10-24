@@ -80,9 +80,10 @@ protected:
    union bind_buf_u {
       char *cstr;
    } buf;
+   QoreListNode *l;
 
 public:
-   DLLLOCAL QoreDB2Column() {}
+   DLLLOCAL QoreDB2Column() : l(0) {}
    DLLLOCAL ~QoreDB2Column();
    DLLLOCAL int describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int cnbufsize, ExceptionSink *xsink);
 
@@ -90,18 +91,6 @@ public:
    DLLLOCAL SQLSMALLINT getType() const { return colType; }
    DLLLOCAL SQLSMALLINT getSize() const { return colSize; }
    DLLLOCAL AbstractQoreNode *getValue(ExceptionSink *xsink) const;
-};
-
-class QoreDB2ColumnList : public QoreDB2Column {
-private:
-   QoreListNode *l;
-
-public:
-   DLLLOCAL QoreDB2ColumnList() : l(0) {}
-   DLLLOCAL ~QoreDB2ColumnList() {
-      if (l)
-	 l->deref(0);
-   }
    DLLLOCAL int doValue(ExceptionSink *xsink) {
       if (!l)
 	 l = new QoreListNode();	 
@@ -116,6 +105,27 @@ public:
    DLLLOCAL qore_size_t size() const {
       return l ? l->size() : 0;
    }
+};
+
+class QoreDB2;
+
+class QoreDB2Result {
+protected:
+   SQLSMALLINT cols;
+   QoreDB2 *qdb2;
+   SQLHANDLE hstmt;
+   QoreDB2Column *columns;
+
+public:
+   DLLLOCAL QoreDB2Result(QoreDB2 *qdb2, const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink);
+   DLLLOCAL ~QoreDB2Result() {
+      if (columns)
+	 delete [] columns;
+      if (hstmt)
+	 SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+   }
+   DLLLOCAL QoreHashNode *getHash(ExceptionSink *xsink);
+   DLLLOCAL QoreListNode *getList(ExceptionSink *xsink);
 };
 
 class QoreDB2 {
@@ -213,64 +223,11 @@ public:
    }
 
    DLLLOCAL AbstractQoreNode *select(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
-      SQLHANDLE hstmt;
-      SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
-      if (QoreDB2::checkError(SQL_HANDLE_DBC, henv, rc, "select: SQLAllocHandle(SQL_HANDLE_STMT)", xsink))
+      QoreDB2Result res(this, sql, args, xsink);
+      if (*xsink)
 	 return 0;
 
-      // free handle on block exit
-      ON_BLOCK_EXIT(SQLFreeHandle, SQL_HANDLE_STMT, hstmt);
-
-      // prepare the statement
-      rc = SQLPrepare(hstmt, (SQLCHAR*)sql.getBuffer(), SQL_NTS);
-      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLPrepare()", xsink))
-	 return 0;
-
-      rc = SQLExecute(hstmt);
-      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLExecute()", xsink))
-	 return 0;
-
-      SQLSMALLINT cols;
-      rc = SQLNumResultCols(hstmt, &cols);
-      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLNumResultCols()", xsink))
-	 return 0;
-
-      printd(0, "QoreDB2::select() query returned %d columns\n", (int)cols);
-
-      if (!cols)
-	 return 0;
-
-      // column name buffer
-      char cname[QORE_DB2_MAX_COL_NAME_LEN + 1];
-      QoreDB2ColumnList columns[cols];
-
-      // bind all columns
-      for (int i = 0; i < cols; ++i) {
-	 if (columns[i].describeAndBind(hstmt, i, cname, QORE_DB2_MAX_COL_NAME_LEN + 1, xsink))
-	    return 0;
-      }
-
-      while (true) {
-	 rc = SQLFetch(hstmt);
-	 if (rc == SQL_NO_DATA_FOUND)
-	    break;
-
-	 for (int i = 0; i < cols; ++i) {
-	    if (columns[i].doValue(xsink))
-	       return 0;
-	 }
-      }
-
-      if (!columns[0].size())
-	 return 0;
-
-      // return hash of lists
-      QoreHashNode *h = new QoreHashNode();
-      for (int i = 0; i < cols; ++i) {
-	 h->setKeyValue(columns[i].getName(), columns[i].takeList(), xsink);
-      }
-
-      return h;
+      return res.getHash(xsink);
    }
 
    DLLLOCAL AbstractQoreNode *exec(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
@@ -278,7 +235,15 @@ public:
    }
 
    DLLLOCAL AbstractQoreNode *select_rows(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
-      return 0;
+      QoreDB2Result res(this, sql, args, xsink);
+      if (*xsink)
+	 return 0;
+
+      return res.getList(xsink);
+   }
+
+   DLLLOCAL SQLHANDLE getDBCHandle() {
+      return hdbc;
    }
 
    DLLLOCAL static int checkError(SQLSMALLINT htype, SQLHANDLE hndl, SQLRETURN rc, const char *info, ExceptionSink *xsink) {
@@ -312,6 +277,86 @@ public:
       return -1;
    }
 };
+
+QoreDB2Result::QoreDB2Result(QoreDB2 *n_qdb2, const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) : qdb2(n_qdb2), hstmt(0), columns(0) {
+   SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_STMT, qdb2->getDBCHandle(), &hstmt);
+   if (QoreDB2::checkError(SQL_HANDLE_DBC, qdb2->getDBCHandle(), rc, "QoreDB2Result::QoreDB2Result(): SQLAllocHandle(SQL_HANDLE_STMT)", xsink))
+      return;
+
+   // prepare the statement
+   rc = SQLPrepare(hstmt, (SQLCHAR*)sql.getBuffer(), SQL_NTS);
+   if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "QoreDB2Result::QoreDB2Result(): SQLPrepare()", xsink))
+      return;
+
+   rc = SQLExecute(hstmt);
+   if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "QoreDB2Result::QoreDB2Result(): SQLExecute()", xsink))
+      return;
+
+   rc = SQLNumResultCols(hstmt, &cols);
+   if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "QoreDB2Result::QoreDB2Result(): SQLNumResultCols()", xsink))
+      return;
+
+   printd(0, "QoreDB2::select() query returned %d columns\n", (int)cols);
+
+   if (!cols)
+      return;
+
+   // column name buffer
+   char cname[QORE_DB2_MAX_COL_NAME_LEN + 1];
+   columns = new QoreDB2Column[cols];
+
+   // bind all columns
+   for (int i = 0; i < cols; ++i) {
+      if (columns[i].describeAndBind(hstmt, i, cname, QORE_DB2_MAX_COL_NAME_LEN + 1, xsink))
+	 return;
+   }
+}
+
+QoreHashNode *QoreDB2Result::getHash(ExceptionSink *xsink) {
+   while (true) {
+      SQLRETURN rc = SQLFetch(hstmt);
+      if (rc == SQL_NO_DATA_FOUND)
+	 break;
+
+      for (int i = 0; i < cols; ++i) {
+	 if (columns[i].doValue(xsink))
+	    return 0;
+      }
+   }
+
+   // return hash of lists
+   QoreHashNode *h = new QoreHashNode();
+   for (int i = 0; i < cols; ++i)
+      h->setKeyValue(columns[i].getName(), columns[i].takeList(), xsink);
+
+   return h;
+}
+
+QoreListNode *QoreDB2Result::getList(ExceptionSink *xsink) {
+   ReferenceHolder<QoreListNode> l(new QoreListNode, xsink);
+
+   while (true) {
+      SQLRETURN rc = SQLFetch(hstmt);
+      if (rc == SQL_NO_DATA_FOUND)
+	 break;
+
+      ReferenceHolder<QoreHashNode> h(new QoreHashNode(), xsink);
+      for (int i = 0; i < cols; ++i) {
+	 AbstractQoreNode *v = columns[i].getValue(xsink);
+	 if (*xsink) {
+	    assert(!v);
+	    return 0;
+	 }
+	 h->setKeyValue(columns[i].getName(), v, xsink);
+	 if (*xsink)
+	    return 0;
+      }
+
+      l->push(h.release());
+   }
+
+   return l.release();
+}
 
 AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
    if (ind == SQL_NULL_DATA)
@@ -362,6 +407,8 @@ QoreDB2Column::~QoreDB2Column() {
 	 }
       }
    }
+   if (l)
+      l->deref(0);
 }
 
 static AbstractQoreNode *db2_exec(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
