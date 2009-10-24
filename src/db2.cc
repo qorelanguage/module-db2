@@ -81,6 +81,9 @@ protected:
       char *cstr;
       int64 bigint;
       double c_double;
+      DATE_STRUCT date;
+      TIME_STRUCT time;
+      TIMESTAMP_STRUCT *timestamp;
    } buf;
    QoreListNode *l;
 
@@ -375,6 +378,17 @@ AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
       case SQL_REAL:
       case SQL_DOUBLE:
 	 return new QoreFloatNode(buf.c_double);
+
+      case SQL_TYPE_DATE:
+	 return new DateTimeNode(buf.date.year, buf.date.month, buf.date.day);
+
+      case SQL_TYPE_TIME:
+	 return new DateTimeNode(1970, 1, 1, buf.time.hour, buf.time.minute, buf.time.second);
+
+      case SQL_TYPE_TIMESTAMP:
+	 return new DateTimeNode(buf.timestamp->year, buf.timestamp->month, buf.timestamp->day, 
+				 buf.timestamp->hour, buf.timestamp->minute, buf.timestamp->second,
+				 buf.timestamp->fraction / 1000000);
    }
 
    // default: handle as string
@@ -412,6 +426,26 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
 	    return -1;
 	 break;
 
+      case SQL_TYPE_DATE:
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_TYPE_DATE, &buf.date, sizeof(buf.date), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+
+      case SQL_TYPE_TIME:
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_TYPE_TIME, &buf.time, sizeof(buf.time), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+
+      case SQL_TYPE_TIMESTAMP: {
+	 buf.timestamp = (TIMESTAMP_STRUCT *)malloc(sizeof(TIMESTAMP_STRUCT));
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_TYPE_TIMESTAMP, buf.timestamp, sizeof(TIMESTAMP_STRUCT), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+      }
+
       // default: handle as string
       default: {
 	 buf.cstr = (char *)malloc(sizeof(char) * (colSize + 1));
@@ -437,13 +471,19 @@ QoreDB2Column::~QoreDB2Column() {
 	 case SQL_DOUBLE:
 	 case SQL_FLOAT:
 	 case SQL_REAL:
+	 case SQL_TYPE_DATE:
+	 case SQL_TYPE_TIME:
+	    break;
+
+	 case SQL_TYPE_TIMESTAMP:
+	    free(buf.timestamp);
 	    break;
 
 	 // default: string data
-	 default: {
+	 default:
 	    if (buf.cstr)
 	       free(buf.cstr);
-	 }
+	    break;
       }
    }
    if (l)
