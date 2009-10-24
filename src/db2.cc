@@ -389,6 +389,15 @@ AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
 	 return new DateTimeNode(buf.timestamp->year, buf.timestamp->month, buf.timestamp->day, 
 				 buf.timestamp->hour, buf.timestamp->minute, buf.timestamp->second,
 				 buf.timestamp->fraction / 1000000);
+
+      case SQL_BIT:
+      case SQL_BINARY:
+      case SQL_VARBINARY: {
+	 //printd(5, "creating binary %p len=%d\n", buf.cstr, ind);
+	 BinaryNode *b = new BinaryNode;
+	 b->append(buf.cstr, ind);
+	 return b;
+      }
    }
 
    // default: handle as string
@@ -441,6 +450,16 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
       case SQL_TYPE_TIMESTAMP: {
 	 buf.timestamp = (TIMESTAMP_STRUCT *)malloc(sizeof(TIMESTAMP_STRUCT));
 	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_TYPE_TIMESTAMP, buf.timestamp, sizeof(TIMESTAMP_STRUCT), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+      }
+
+      case SQL_BIT:
+      case SQL_VARBINARY:
+      case SQL_BINARY: {
+	 buf.cstr = (char *)malloc(sizeof(char) * (colSize));
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_BINARY, buf.cstr, colSize, &ind);
 	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
 	    return -1;
 	 break;
