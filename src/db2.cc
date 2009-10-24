@@ -65,8 +65,9 @@ static QoreString QoreDB2ClientName;
 static QoreString this_hostname;
 static const char *this_user = 0;
 
-class QoreDB2Handle {
-};
+#define QORE_DB2_MAX_COL_NAME_LEN 128
+
+//class QoreDB2Handle {};
 
 class QoreDB2 {
 private:
@@ -150,15 +151,65 @@ public:
 
    DLLLOCAL int commit(ExceptionSink *xsink) {
       SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, hdbc, SQL_COMMIT);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "SQLEndTran(SQL_COMMIT)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_DBC, hdbc, rc, "SQLEndTran(SQL_COMMIT)", xsink))
 	 return -1;
       return 0;
    }
 
    DLLLOCAL int rollback(ExceptionSink *xsink) {
       SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, hdbc, SQL_ROLLBACK);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "SQLEndTran(SQL_ROLLBACK)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_DBC, hdbc, rc, "SQLEndTran(SQL_ROLLBACK)", xsink))
 	 return -1;
+      return 0;
+   }
+
+   DLLLOCAL AbstractQoreNode *select(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
+      SQLHANDLE hstmt;
+      SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt);
+      if (QoreDB2::checkError(SQL_HANDLE_DBC, henv, rc, "select: SQLAllocHandle(SQL_HANDLE_STMT)", xsink))
+	 return 0;
+
+      // free handle on block exit
+      ON_BLOCK_EXIT(SQLFreeHandle, SQL_HANDLE_STMT, hstmt);
+
+      // prepare the statement
+      rc = SQLPrepare(hstmt, (SQLCHAR*)sql.getBuffer(), SQL_NTS);
+      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLPrepare()", xsink))
+	 return 0;
+
+      rc = SQLExecute(hstmt);
+      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLExecute()", xsink))
+	 return 0;
+
+      SQLSMALLINT cols;
+      rc = SQLNumResultCols(hstmt, &cols);
+      if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLNumResultCols()", xsink))
+	 return 0;
+
+      printd(0, "QoreDB2::select() query returned %d columns\n", (int)cols);
+
+      for (int i = 0; i < cols; ++i) {
+	 SQLSMALLINT colNameLen;
+	 SQLSMALLINT colType;
+	 SQLUINTEGER colSize;
+	 SQLSMALLINT colScale;
+	 char cname[QORE_DB2_MAX_COL_NAME_LEN + 1];
+
+	 rc = SQLDescribeCol(hstmt, (SQLSMALLINT)(i + 1), (SQLCHAR*)cname, sizeof(cname), &colNameLen, &colType, &colSize, &colScale, 0);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLDescribeCol()", xsink))
+	    return 0;
+
+	 printd(0, "column %d/%d: %s: type=%d size=%d scale=%d\n", i, cols, cname, colType, colSize, colScale);
+      }
+
+      return 0;
+   }
+
+   DLLLOCAL AbstractQoreNode *exec(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
+      return 0;
+   }
+
+   DLLLOCAL AbstractQoreNode *select_rows(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
       return 0;
    }
 
@@ -195,15 +246,15 @@ public:
 };
 
 static AbstractQoreNode *db2_exec(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
-   return 0;
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->exec(*qstr, args, xsink);
 }
 
 static AbstractQoreNode *db2_select(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
-   return 0;
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->select(*qstr, args, xsink);
 }
 
 static AbstractQoreNode *db2_select_rows(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
-   return 0;
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->select_rows(*qstr, args, xsink);
 }
 
 static int db2_commit(Datasource *ds, ExceptionSink *xsink) {
