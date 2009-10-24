@@ -63,6 +63,7 @@ DBIDriver *DBID_DB2 = 0;
 
 static QoreString QoreDB2ClientName;
 static QoreString this_hostname;
+static const char *this_user = 0;
 
 class QoreDB2Handle {
 };
@@ -97,30 +98,41 @@ public:
 	 return;
       }
 
+      //printd(5, "QoreDB2::QoreDB2() calling SQLSetEnvAttr(SQL_ATTR_ODBC_VERSION)\n");
       // set environment attributes
       rc = SQLSetEnvAttr(henv, SQL_ATTR_ODBC_VERSION, (void *)SQL_OV_ODBC3, 0);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLSetEnvAttr(SQL_ATTR_ODBC_VERSION)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetEnvAttr(SQL_ATTR_ODBC_VERSION)", xsink))
 	 return;
 
+      //printd(5, "QoreDB2::QoreDB2() calling SQLSetEnvAttr(SQL_ATTR_INFO_APPLNAME)\n");
       rc = SQLSetEnvAttr(henv, SQL_ATTR_INFO_APPLNAME, (void *)QoreDB2ClientName.getBuffer(), 0);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLSetEnvAttr(SQL_ATTR_INFO_APPLNAME)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetEnvAttr(SQL_ATTR_INFO_APPLNAME)", xsink))
 	 return;
 
+      //printd(5, "QoreDB2::QoreDB2() calling SQLSetEnvAttr(SQL_ATTR_INFO_WRKSTNNAME)\n");
       rc = SQLSetEnvAttr(henv, SQL_ATTR_INFO_WRKSTNNAME, (void *)this_hostname.getBuffer(), 0);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLSetEnvAttr(SQL_ATTR_INFO_WRKSTNNAME)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetEnvAttr(SQL_ATTR_INFO_WRKSTNNAME)", xsink))
 	 return;
 
+      //printd(5, "QoreDB2::QoreDB2() calling SQLSetEnvAttr(SQL_ATTR_INFO_USERID)\n");
+      rc = SQLSetEnvAttr(henv, SQL_ATTR_INFO_USERID, (void *)this_user, 0);
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetEnvAttr(SQL_ATTR_INFO_USERID)", xsink))
+	 return;
+
+      //printd(5, "QoreDB2::QoreDB2() calling SQLAllocHandle(SQL_HANDLE_DBC)\n");
       rc = SQLAllocHandle(SQL_HANDLE_DBC, henv, &hdbc);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLAllocHandle(SQL_HANDLE_DBC)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLAllocHandle(SQL_HANDLE_DBC)", xsink))
 	 return;
 
       // set connection attributes
+      //printd(5, "QoreDB2::QoreDB2() calling SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF)\n");
       rc = SQLSetConnectAttr(hdbc, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)SQL_AUTOCOMMIT_OFF, SQL_NTS);
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF)", xsink))
 	 return;
 
+      //printd(5, "QoreDB2::QoreDB2() calling SQLConnect()\n");
       rc = SQLConnect(hdbc, (SQLCHAR *)dbname.c_str(), dbname.size(), (SQLCHAR *)user.c_str(), user.size(), (SQLCHAR *)pass.c_str(), pass.size());
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open() SQLConnect()", xsink))
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLConnect()", xsink))
 	 return;
    }
 
@@ -134,6 +146,20 @@ public:
       if (henv) {
 	 SQLFreeHandle(SQL_HANDLE_ENV, henv);
       }
+   }
+
+   DLLLOCAL int commit(ExceptionSink *xsink) {
+      SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, hdbc, SQL_COMMIT);
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "SQLEndTran(SQL_COMMIT)", xsink))
+	 return -1;
+      return 0;
+   }
+
+   DLLLOCAL int rollback(ExceptionSink *xsink) {
+      SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, hdbc, SQL_ROLLBACK);
+      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "SQLEndTran(SQL_ROLLBACK)", xsink))
+	 return -1;
+      return 0;
    }
 
    DLLLOCAL static int checkError(SQLSMALLINT htype, SQLHANDLE hndl, SQLRETURN rc, const char *info, ExceptionSink *xsink) {
@@ -180,12 +206,12 @@ static AbstractQoreNode *db2_select_rows(Datasource *ds, const QoreString *qstr,
    return 0;
 }
 
-static int db2_commit(class Datasource *ds, ExceptionSink *xsink) {
-   return 0;
+static int db2_commit(Datasource *ds, ExceptionSink *xsink) {
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->commit(xsink);
 }
 
-static int db2_rollback(class Datasource *ds, ExceptionSink *xsink) {
-   return 0;
+static int db2_rollback(Datasource *ds, ExceptionSink *xsink) {
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->rollback(xsink);
 }
 
 static int db2_open(Datasource *ds, ExceptionSink *xsink) {
@@ -231,6 +257,19 @@ static QoreStringNode *db2_module_init() {
    QORE_TRACE("db2_module_init()");
 
    QoreDB2ClientName.sprintf("Qore DB2 driver v%s on Qore v%s %s %s", PACKAGE_VERSION, qore_version_string, qore_target_arch, qore_target_os);
+
+   // DB2 API global initialization
+   // turn off thread locking in the DB2 API - all locking will be provided by qore
+   SQLRETURN rc = SQLSetEnvAttr(SQL_NULL_HANDLE, SQL_ATTR_PROCESSCTL, (void *)SQL_PROCESSCTL_NOTHREAD, 0);
+   if (rc != SQL_SUCCESS) {
+      QoreStringNode *err = new QoreStringNode("error initializing DB2 API: SQLSetEnvAttr(SQL_NULL_HANDLE, SQL_ATTR_PROCESSCTL, (void *)SQL_PROCESSCTL_NOTHREAD, 0) returned %d", rc);
+      return err;
+   }
+
+   // get username
+   this_user = getlogin();
+   if (!this_user)
+      this_user = "<unknown user>";
 
    // get hostname
    char buf[HOSTNAMEBUFSIZE + 1];

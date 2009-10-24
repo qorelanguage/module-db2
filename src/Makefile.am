@@ -2,7 +2,7 @@ DB2_SOURCES = db2.cc
 
 lib_LTLIBRARIES = db2.la
 db2_la_SOURCES = $(DB2_SOURCES)
-db2_la_LDFLAGS = -module -avoid-version ${DB2_LIBS}
+db2_la_LDFLAGS = -module -avoid-version ${DB2_LDFLAGS}
 
 AM_CPPFLAGS = ${QORE_CPPFLAGS} ${DB2_CPPFLAGS}
 
