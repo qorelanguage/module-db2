@@ -80,6 +80,7 @@ protected:
    union bind_buf_u {
       char *cstr;
       int64 bigint;
+      double c_double;
    } buf;
    QoreListNode *l;
 
@@ -369,6 +370,11 @@ AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
       case SQL_C_SHORT:
       case SQL_BIGINT: 
 	 return new QoreBigIntNode(buf.bigint);
+
+      case SQL_FLOAT:
+      case SQL_REAL:
+      case SQL_DOUBLE:
+	 return new QoreFloatNode(buf.c_double);
    }
 
    // default: handle as string
@@ -397,7 +403,15 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
 	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
 	    return -1;
 	 break;
-      
+
+      case SQL_FLOAT:
+      case SQL_REAL:
+      case SQL_DOUBLE:
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_DOUBLE, &buf.c_double, sizeof(buf.c_double), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+
       // default: handle as string
       default: {
 	 buf.cstr = (char *)malloc(sizeof(char) * (colSize + 1));
@@ -416,13 +430,16 @@ QoreDB2Column::~QoreDB2Column() {
    // we have data to delete
    if (!cname.empty()) {
       switch (colType) {
-	 // default: string data
 	 case SQL_TINYINT:
 	 case SQL_C_LONG:
 	 case SQL_C_SHORT:
 	 case SQL_BIGINT:
+	 case SQL_DOUBLE:
+	 case SQL_FLOAT:
+	 case SQL_REAL:
 	    break;
 
+	 // default: string data
 	 default: {
 	    if (buf.cstr)
 	       free(buf.cstr);
