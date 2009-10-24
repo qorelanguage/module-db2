@@ -79,6 +79,7 @@ protected:
    std::string cname;
    union bind_buf_u {
       char *cstr;
+      int64 bigint;
    } buf;
    QoreListNode *l;
 
@@ -363,6 +364,11 @@ AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
       return null();
 
    switch (colType) {
+      case SQL_TINYINT:
+      case SQL_C_LONG:
+      case SQL_C_SHORT:
+      case SQL_BIGINT: 
+	 return new QoreBigIntNode(buf.bigint);
    }
 
    // default: handle as string
@@ -383,12 +389,22 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
    cname = cnbuf;
 
    switch (colType) {
+      case SQL_TINYINT:
+      case SQL_C_LONG:
+      case SQL_C_SHORT:
+      case SQL_BIGINT: 
+	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_SBIGINT, &buf.bigint, sizeof(buf.bigint), &ind);
+	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
+	    return -1;
+	 break;
+      
       // default: handle as string
       default: {
 	 buf.cstr = (char *)malloc(sizeof(char) * (colSize + 1));
 	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_CHAR, buf.cstr, colSize + 1, &ind);
 	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
 	    return -1;
+	 break;
       }
    }
 
@@ -401,6 +417,12 @@ QoreDB2Column::~QoreDB2Column() {
    if (!cname.empty()) {
       switch (colType) {
 	 // default: string data
+	 case SQL_TINYINT:
+	 case SQL_C_LONG:
+	 case SQL_C_SHORT:
+	 case SQL_BIGINT:
+	    break;
+
 	 default: {
 	    if (buf.cstr)
 	       free(buf.cstr);
