@@ -205,15 +205,14 @@ public:
 
       // build connection string
       QoreString str;
-      str.sprintf("dsn=%s", n_ds.getDBName());
+      if (n_ds.getHostName() && n_ds.getPort())
+	 str.sprintf("database=%s;hostname=%s;servicename=%d;protocol=tcpip", n_ds.getDBName(), n_ds.getHostName(), n_ds.getPort());
+      else
+	 str.sprintf("dsn=%s", n_ds.getDBName());
       if (n_ds.getUsername())
 	 str.sprintf(";uid=%s", n_ds.getUsername());
       if (n_ds.getPassword())
 	 str.sprintf(";pwd=%s", n_ds.getPassword());
-      if (n_ds.getHostName())
-	 str.sprintf(";hostname=%s", n_ds.getHostName());
-      if (n_ds.getPort())
-	 str.sprintf(";servicename=%d", n_ds.getPort());
 
       //printd(0, "QoreDB2::QoreDB2() connection string: '%s'\n", str.getBuffer());
 
