@@ -160,14 +160,11 @@ private:
       }
       if (i == 1)
 	 desc->concat("no diagnostic information available");
+      desc->trim();
    }
 
 public:
    DLLLOCAL QoreDB2(Datasource &n_ds, ExceptionSink *xsink) : henv(0), hdbc(0), ds(&n_ds) {
-      const std::string &dbname = n_ds.getDBNameStr();
-      const std::string &user = n_ds.getUsernameStr();
-      const std::string &pass = n_ds.getPasswordStr();
-
       SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv);
       if (rc != SQL_SUCCESS) {
 	 xsink->raiseException("DBI:DB2:OPEN-ERROR", "error allocating environment handle: SQLAllocHandle() returned %d", rc);
@@ -206,9 +203,22 @@ public:
       if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF)", xsink))
 	 return;
 
-      //printd(5, "QoreDB2::QoreDB2() calling SQLConnect()\n");
-      rc = SQLConnect(hdbc, (SQLCHAR *)dbname.c_str(), dbname.size(), (SQLCHAR *)user.c_str(), user.size(), (SQLCHAR *)pass.c_str(), pass.size());
-      if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLConnect()", xsink))
+      // build connection string
+      QoreString str;
+      str.sprintf("dsn=%s", n_ds.getDBName());
+      if (n_ds.getUsername())
+	 str.sprintf(";uid=%s", n_ds.getUsername());
+      if (n_ds.getPassword())
+	 str.sprintf(";pwd=%s", n_ds.getPassword());
+      if (n_ds.getHostName())
+	 str.sprintf(";hostname=%s", n_ds.getHostName());
+      if (n_ds.getPort())
+	 str.sprintf(";servicename=%d", n_ds.getPort());
+
+      //printd(0, "QoreDB2::QoreDB2() connection string: '%s'\n", str.getBuffer());
+
+      rc = SQLDriverConnect(hdbc, 0, (SQLCHAR *)str.getBuffer(), str.strlen(), 0, 0, 0, SQL_DRIVER_NOPROMPT);
+      if (QoreDB2::checkError(SQL_HANDLE_DBC, hdbc, rc, "open: SQLDriverConnect()", xsink))
 	 return;
 
       // get connection code page
@@ -220,7 +230,7 @@ public:
 
       const QoreEncoding *enc;
       qore_db2_cp_map_t::iterator i = qore_db2_cp_map.find(codepage);
-      QoreString str;
+      str.clear();
       if (i == qore_db2_cp_map.end()) {
 	 str.sprintf("ibm-%d", codepage);
 	 enc = QEM.findCreate(&str);
@@ -229,9 +239,11 @@ public:
       else
 	 enc = QEM.findCreate(i->second);
       str.sprintf("%d", codepage);
+
+      // set character encoding for connection
       n_ds.setQoreEncoding(enc);
       n_ds.setDBEncoding(str.getBuffer());
-      printd(0, "connection codepage is %d: %s\n", codepage, enc->getCode());
+      //printd(0, "connection codepage is %d: %s\n", codepage, enc->getCode());
    }
 
    DLLLOCAL ~QoreDB2() {
