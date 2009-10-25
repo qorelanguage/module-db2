@@ -39,6 +39,7 @@
 
 #include <memory>
 #include <string>
+#include <map>
 
 static QoreStringNode *db2_module_init();
 static void db2_module_ns_init(QoreNamespace *rns, QoreNamespace *qns);
@@ -69,6 +70,11 @@ static const char *this_user = 0;
 
 //class QoreDB2Handle {};
 
+// type for mapping DB2 code pages to character encodings
+typedef std::map<int, const char *> qore_db2_cp_map_t;
+// maps DB2 code pages to character encodings
+qore_db2_cp_map_t qore_db2_cp_map;
+
 class QoreDB2Column {
 protected:
    int col_no;
@@ -95,11 +101,11 @@ public:
    DLLLOCAL const char *getName() const { return cname.c_str(); }
    DLLLOCAL SQLSMALLINT getType() const { return colType; }
    DLLLOCAL SQLSMALLINT getSize() const { return colSize; }
-   DLLLOCAL AbstractQoreNode *getValue(ExceptionSink *xsink) const;
-   DLLLOCAL int doValue(ExceptionSink *xsink) {
+   DLLLOCAL AbstractQoreNode *getValue(const QoreEncoding *enc, ExceptionSink *xsink) const;
+   DLLLOCAL int doValue(const QoreEncoding *enc, ExceptionSink *xsink) {
       if (!l)
 	 l = new QoreListNode();	 
-      l->push(getValue(xsink));
+      l->push(getValue(enc, xsink));
       return *xsink ? -1 : 0;
    }
    DLLLOCAL QoreListNode *takeList() {
@@ -129,13 +135,14 @@ public:
       if (hstmt)
 	 SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
    }
-   DLLLOCAL QoreHashNode *getHash(ExceptionSink *xsink);
-   DLLLOCAL QoreListNode *getList(ExceptionSink *xsink);
+   DLLLOCAL QoreHashNode *getHash(const QoreEncoding *enc, ExceptionSink *xsink);
+   DLLLOCAL QoreListNode *getList(const QoreEncoding *enc, ExceptionSink *xsink);
 };
 
 class QoreDB2 {
 private:
    SQLHANDLE henv, hdbc;
+   Datasource *ds;
 
    // add diagnostic info to exception description string
    DLLLOCAL static void addDiagnostics(SQLSMALLINT htype, SQLHANDLE hndl, QoreStringNode *desc) {
@@ -156,7 +163,11 @@ private:
    }
 
 public:
-   DLLLOCAL QoreDB2(const std::string &dbname, const std::string &user, const std::string &pass, ExceptionSink *xsink) : henv(0), hdbc(0) {
+   DLLLOCAL QoreDB2(Datasource &n_ds, ExceptionSink *xsink) : henv(0), hdbc(0), ds(&n_ds) {
+      const std::string &dbname = n_ds.getDBNameStr();
+      const std::string &user = n_ds.getUsernameStr();
+      const std::string &pass = n_ds.getPasswordStr();
+
       SQLRETURN rc = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &henv);
       if (rc != SQL_SUCCESS) {
 	 xsink->raiseException("DBI:DB2:OPEN-ERROR", "error allocating environment handle: SQLAllocHandle() returned %d", rc);
@@ -199,6 +210,28 @@ public:
       rc = SQLConnect(hdbc, (SQLCHAR *)dbname.c_str(), dbname.size(), (SQLCHAR *)user.c_str(), user.size(), (SQLCHAR *)pass.c_str(), pass.size());
       if (QoreDB2::checkError(SQL_HANDLE_ENV, henv, rc, "open: SQLConnect()", xsink))
 	 return;
+
+      // get connection code page
+      SQLINTEGER codepage;
+      SQLSMALLINT len;
+      rc = SQLGetInfo(hdbc, SQL_CONNECT_CODEPAGE, &codepage, sizeof(SQLINTEGER), &len);
+      if (QoreDB2::checkError(SQL_HANDLE_DBC, hdbc, rc, "open: SQLGetInfo(SQL_CONNECT_CODEPAGE)", xsink))
+	 return;
+
+      const QoreEncoding *enc;
+      qore_db2_cp_map_t::iterator i = qore_db2_cp_map.find(codepage);
+      QoreString str;
+      if (i == qore_db2_cp_map.end()) {
+	 str.sprintf("ibm-%d", codepage);
+	 enc = QEM.findCreate(&str);
+	 str.clear();
+      }
+      else
+	 enc = QEM.findCreate(i->second);
+      str.sprintf("%d", codepage);
+      n_ds.setQoreEncoding(enc);
+      n_ds.setDBEncoding(str.getBuffer());
+      printd(0, "connection codepage is %d: %s\n", codepage, enc->getCode());
    }
 
    DLLLOCAL ~QoreDB2() {
@@ -232,7 +265,7 @@ public:
       if (*xsink)
 	 return 0;
 
-      return res.getHash(xsink);
+      return res.getHash(ds->getQoreEncoding(), xsink);
    }
 
    DLLLOCAL AbstractQoreNode *exec(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
@@ -244,7 +277,7 @@ public:
       if (*xsink)
 	 return 0;
 
-      return res.getList(xsink);
+      return res.getList(ds->getQoreEncoding(), xsink);
    }
 
    DLLLOCAL SQLHANDLE getDBCHandle() {
@@ -301,7 +334,7 @@ QoreDB2Result::QoreDB2Result(QoreDB2 *n_qdb2, const QoreString &sql, const QoreL
    if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "QoreDB2Result::QoreDB2Result(): SQLNumResultCols()", xsink))
       return;
 
-   printd(0, "QoreDB2::select() query returned %d columns\n", (int)cols);
+   printd(5, "QoreDB2::select() query returned %d columns\n", (int)cols);
 
    if (!cols)
       return;
@@ -317,14 +350,14 @@ QoreDB2Result::QoreDB2Result(QoreDB2 *n_qdb2, const QoreString &sql, const QoreL
    }
 }
 
-QoreHashNode *QoreDB2Result::getHash(ExceptionSink *xsink) {
+QoreHashNode *QoreDB2Result::getHash(const QoreEncoding *enc, ExceptionSink *xsink) {
    while (true) {
       SQLRETURN rc = SQLFetch(hstmt);
       if (rc == SQL_NO_DATA_FOUND)
 	 break;
 
       for (int i = 0; i < cols; ++i) {
-	 if (columns[i].doValue(xsink))
+	 if (columns[i].doValue(enc, xsink))
 	    return 0;
       }
    }
@@ -337,7 +370,7 @@ QoreHashNode *QoreDB2Result::getHash(ExceptionSink *xsink) {
    return h;
 }
 
-QoreListNode *QoreDB2Result::getList(ExceptionSink *xsink) {
+QoreListNode *QoreDB2Result::getList(const QoreEncoding *enc, ExceptionSink *xsink) {
    ReferenceHolder<QoreListNode> l(new QoreListNode, xsink);
 
    while (true) {
@@ -347,7 +380,7 @@ QoreListNode *QoreDB2Result::getList(ExceptionSink *xsink) {
 
       ReferenceHolder<QoreHashNode> h(new QoreHashNode(), xsink);
       for (int i = 0; i < cols; ++i) {
-	 AbstractQoreNode *v = columns[i].getValue(xsink);
+	 AbstractQoreNode *v = columns[i].getValue(enc, xsink);
 	 if (*xsink) {
 	    assert(!v);
 	    return 0;
@@ -363,7 +396,7 @@ QoreListNode *QoreDB2Result::getList(ExceptionSink *xsink) {
    return l.release();
 }
 
-AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
+AbstractQoreNode *QoreDB2Column::getValue(const QoreEncoding *enc, ExceptionSink *xsink) const {
    if (ind == SQL_NULL_DATA)
       return null();
 
@@ -402,7 +435,7 @@ AbstractQoreNode *QoreDB2Column::getValue(ExceptionSink *xsink) const {
 
    // default: handle as string
    // FIXME: set encoding
-   return new QoreStringNode(buf.cstr);
+   return new QoreStringNode(buf.cstr, enc);
 }
 
 int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int cnbufsize, ExceptionSink *xsink) {
@@ -475,7 +508,7 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
       }
    }
 
-   printd(0, "QoreDB2Column::describeAndBind() col %d: %s type %d size %d\n", col_no, cnbuf, colType, colSize);
+   printd(5, "QoreDB2Column::describeAndBind() col %d: %s type %d size %d\n", col_no, cnbuf, colType, colSize);
    return 0;
 }
 
@@ -535,7 +568,7 @@ static int db2_open(Datasource *ds, ExceptionSink *xsink) {
       return -1;
    }
 
-   std::auto_ptr<QoreDB2> db2(new QoreDB2(ds->getDBNameStr(), ds->getUsernameStr(), ds->getPasswordStr(), xsink));
+   std::auto_ptr<QoreDB2> db2(new QoreDB2(*ds, xsink));
    if (*xsink)
       return -1;
    
@@ -570,6 +603,40 @@ static AbstractQoreNode *db2_get_client_version(const Datasource *ds, ExceptionS
 
 static QoreStringNode *db2_module_init() {
    QORE_TRACE("db2_module_init()");
+   
+   // setup code page map
+   qore_db2_cp_map[819]  = "iso-8859-1";
+   qore_db2_cp_map[912]  = "iso-8859-2";
+   qore_db2_cp_map[915]  = "iso-8859-5";
+   qore_db2_cp_map[1089] = "iso-8859-6";
+   qore_db2_cp_map[813]  = "iso-8859-7";
+   qore_db2_cp_map[916]  = "iso-8859-8";
+   qore_db2_cp_map[920]  = "iso-8859-9";
+   qore_db2_cp_map[923]  = "iso-8859-15";
+   qore_db2_cp_map[1051] = "roman8";
+   qore_db2_cp_map[1208] = "utf-8";
+   qore_db2_cp_map[1167] = "koi8-r";
+   qore_db2_cp_map[1168] = "koi8-u";
+   qore_db2_cp_map[1250] = "windows-1250";
+   qore_db2_cp_map[1251] = "windows-1251";
+   qore_db2_cp_map[1252] = "windows-1252";
+   qore_db2_cp_map[1253] = "windows-1253";
+   qore_db2_cp_map[1254] = "windows-1254";
+   qore_db2_cp_map[1255] = "windows-1255";
+   qore_db2_cp_map[1256] = "windows-1256";
+   qore_db2_cp_map[1257] = "windows-1257";
+   qore_db2_cp_map[1258] = "windows-1258";
+   qore_db2_cp_map[737]  = "windows-737";
+   qore_db2_cp_map[1363] = "windows-1363";
+   qore_db2_cp_map[1383] = "gb2312";
+   qore_db2_cp_map[1386] = "gbk";
+   qore_db2_cp_map[950]  = "big5";
+   qore_db2_cp_map[874]  = "tis620";
+   qore_db2_cp_map[1392] = "gb18030";
+   qore_db2_cp_map[954]  = "eucjp";
+   qore_db2_cp_map[5039] = "sjis";
+   qore_db2_cp_map[970]  = "euckr";
+   qore_db2_cp_map[964]  = "euctw";
 
    QoreDB2ClientName.sprintf("Qore DB2 driver v%s on Qore v%s %s %s", PACKAGE_VERSION, qore_version_string, qore_target_arch, qore_target_os);
 
