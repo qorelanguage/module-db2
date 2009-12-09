@@ -239,27 +239,36 @@ find_db2() {
     dir="$1"
     if test -z "$dir"; then
         dir=/
-        lib=/lib
+        lib=/lib${LIBSUFFIX}
         inc=/usr/include
     else
         lib="$dir/lib${LIBSUFFIX}"
         inc="$dir/include"
     fi
 
-    #echo checking dir=$dir inc=$inc lib=$lib inc2=$dir/sqllib/include/sqlcli1.h lib2=$dir/sqllib/lib${LIBSUFFIX}/libdb2.${SHLIB_SUFFIX}
+    echo checking dir=$dir inc=$inc lib=$lib inc2=$dir/sqllib/include/sqlcli1.h lib2=$dir/sqllib/lib${LIBSUFFIX}/libdb2.${SHLIB_SUFFIX}
 
     if test -f "$lib/libdb2.${SHLIB_SUFFIX}"; then
-        if test "$lib" != "/lib" -a "$lib" != "/usr/lib"; then
-            DB2_LDFLAGS="-L$lib"
+        if test "$lib" != "/lib${LIBSUFFIX}" -a "$lib" != "/usr/lib${LIBSUFFIX}"; then
+            DB2_LDFLAGS="-L$lib -ldb2"
+	else
+	    DB2_LDFLAGS="-ldb2"
         fi
-        DB2_LDFLAGS="$DB2_LDFLAGS -ldb2"
         with_db2_libs="$lib"
     elif test -f "$dir/sqllib/lib${LIBSUFFIX}/libdb2.${SHLIB_SUFFIX}"; then
         DB2_LDFLAGS="-L$dir/sqllib/lib${LIBSUFFIX} -ldb2"
         with_db2_libs="$dir/sqllib/lib${LIBSUFFIX}"
+	inc=$dir/sqllib/include
     elif test -f "$lib/sqllib/libdb2.${SHLIB_SUFFIX}"; then
         DB2_LDFLAGS="-L$lib/sqllib -ldb2"
         with_db2_libs="$lib/sqllib"
+    elif test "$enable_64bit" = "no" -a -f "$dir/lib32/libdb2.${SHLIB_SUFFIX}"; then
+        DB2_LDFLAGS="-L$dir/lib32 -ldb2"
+        with_db2_libs="$dir/lib32"
+    elif test "$enable_64bit" = "no" -a -f "$dir/sqllib/lib32/libdb2.${SHLIB_SUFFIX}"; then
+        DB2_LDFLAGS="-L$dir/sqllib/lib32 -ldb2"
+        with_db2_libs="$dir/sqllib/lib32"
+	inc=$dir/sqllib/include
     else
 	return
     fi
@@ -288,7 +297,7 @@ for dir in "${with_db2}" "${find_prefix}" /opt /usr /usr/local "$HOME"; do
 done
 
 if test -z "$DB2_LDFLAGS"; then
-   AC_MSG_ERROR([DB2 client library not found; cannot build module without db2 support])
+   AC_MSG_ERROR([DB2 client library not found; cannot build module without db2 support; try setting DB2DIR=<dir>])
 fi
 
 AC_SUBST(DB2_LDFLAGS)
@@ -383,11 +392,15 @@ else
       qv_minor=`grep QORE_VERSION_MINOR $QORE_INC_DIR/qore/qore-version.h|cut -f3 -d\  2>/dev/null`
       qv_sub=`grep QORE_VERSION_SUB $QORE_INC_DIR/qore/qore-version.h|cut -f3 -d\  2>/dev/null`
 
-      qvc=`printf "%02d%02d%02d" $qv_major $qv_minor $qv_sub`
+      if test "$qv_major" -gt 0; then
+         qvc=`printf "%d%02d%02d" $qv_major $qv_minor $qv_sub`
+      else
+         qvc=`printf "%d%02d" $qv_major $qv_minor $qv_sub`
+      fi
       AC_DEFINE_UNQUOTED([QORE_VERSION_CODE], $qvc, [define when missing in Qore headers])
    fi
 
-   if test $qvc -lt 000706; then
+   if test $qvc -lt 706; then
       AC_MSG_ERROR([found $qore_version; this module requires at least version 0.7.6])
    fi
 
