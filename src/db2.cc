@@ -104,7 +104,7 @@ public:
    DLLLOCAL AbstractQoreNode *getValue(const QoreEncoding *enc, ExceptionSink *xsink) const;
    DLLLOCAL int doValue(const QoreEncoding *enc, ExceptionSink *xsink) {
       if (!l)
-	 l = new QoreListNode();	 
+	 l = new QoreListNode();
       l->push(getValue(enc, xsink));
       return *xsink ? -1 : 0;
    }
@@ -283,6 +283,12 @@ public:
       return 0;
    }
 
+#ifdef _QORE_HAS_DBI_EXECRAW
+   DLLLOCAL AbstractQoreNode *execRaw(const QoreString &sql, ExceptionSink *xsink) {
+      return 0;
+   }
+#endif
+
    DLLLOCAL AbstractQoreNode *select_rows(const QoreString &sql, const QoreListNode *args, ExceptionSink *xsink) {
       QoreDB2Result res(this, sql, args, xsink);
       if (*xsink)
@@ -415,7 +421,7 @@ AbstractQoreNode *QoreDB2Column::getValue(const QoreEncoding *enc, ExceptionSink
       case SQL_TINYINT:
       case SQL_C_LONG:
       case SQL_C_SHORT:
-      case SQL_BIGINT: 
+      case SQL_BIGINT:
 	 return new QoreBigIntNode(buf.bigint);
 
       case SQL_FLOAT:
@@ -430,7 +436,7 @@ AbstractQoreNode *QoreDB2Column::getValue(const QoreEncoding *enc, ExceptionSink
 	 return new DateTimeNode(1970, 1, 1, buf.time.hour, buf.time.minute, buf.time.second);
 
       case SQL_TYPE_TIMESTAMP:
-	 return new DateTimeNode(buf.timestamp->year, buf.timestamp->month, buf.timestamp->day, 
+	 return new DateTimeNode(buf.timestamp->year, buf.timestamp->month, buf.timestamp->day,
 				 buf.timestamp->hour, buf.timestamp->minute, buf.timestamp->second,
 				 buf.timestamp->fraction / 1000000);
 
@@ -454,7 +460,7 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
    SQLRETURN rc = SQLDescribeCol(hstmt, (SQLSMALLINT)(col_no + 1), (SQLCHAR*)cnbuf, cnbufsize, &colNameLen, &colType, &colSize, &colScale, 0);
    if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLDescribeCol()", xsink))
       return -1;
-   
+
    // make column name lower case
    strtolower(cnbuf);
 
@@ -465,7 +471,7 @@ int QoreDB2Column::describeAndBind(SQLHANDLE hstmt, int col_no, char *cnbuf, int
       case SQL_TINYINT:
       case SQL_C_LONG:
       case SQL_C_SHORT:
-      case SQL_BIGINT: 
+      case SQL_BIGINT:
 	 rc = SQLBindCol(hstmt, col_no + 1, SQL_C_SBIGINT, &buf.bigint, sizeof(buf.bigint), &ind);
 	 if (QoreDB2::checkError(SQL_HANDLE_STMT, hstmt, rc, "select: SQLBindCol()", xsink))
 	    return -1;
@@ -557,6 +563,12 @@ static AbstractQoreNode *db2_exec(Datasource *ds, const QoreString *qstr, const 
    return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->exec(*qstr, args, xsink);
 }
 
+#ifdef _QORE_HAS_DBI_EXECRAW
+static AbstractQoreNode *db2_execRaw(Datasource *ds, const QoreString *qstr, ExceptionSink *xsink) {
+   return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->execRaw(*qstr, xsink);
+}
+#endif
+
 static AbstractQoreNode *db2_select(Datasource *ds, const QoreString *qstr, const QoreListNode *args, ExceptionSink *xsink) {
    return reinterpret_cast<QoreDB2 *>(ds->getPrivateData())->select(*qstr, args, xsink);
 }
@@ -582,7 +594,7 @@ static int db2_open(Datasource *ds, ExceptionSink *xsink) {
    std::auto_ptr<QoreDB2> db2(new QoreDB2(*ds, xsink));
    if (*xsink)
       return -1;
-   
+
    ds->setPrivateData((void *)db2.release());
    return 0;
 }
@@ -614,7 +626,7 @@ static AbstractQoreNode *db2_get_client_version(const Datasource *ds, ExceptionS
 
 static QoreStringNode *db2_module_init() {
    QORE_TRACE("db2_module_init()");
-   
+
    // setup code page map
    qore_db2_cp_map[819]  = "iso-8859-1";
    qore_db2_cp_map[912]  = "iso-8859-2";
@@ -675,11 +687,14 @@ static QoreStringNode *db2_module_init() {
    methods.add(QDBI_METHOD_SELECT, db2_select);
    methods.add(QDBI_METHOD_SELECT_ROWS, db2_select_rows);
    methods.add(QDBI_METHOD_EXEC, db2_exec);
+#ifdef _QORE_HAS_DBI_EXECRAW
+   methods.add(QDBI_METHOD_EXECRAW, db2_execRaw);
+#endif
    methods.add(QDBI_METHOD_COMMIT, db2_commit);
    methods.add(QDBI_METHOD_ROLLBACK, db2_rollback);
    methods.add(QDBI_METHOD_GET_SERVER_VERSION, db2_get_server_version);
    methods.add(QDBI_METHOD_GET_CLIENT_VERSION, db2_get_client_version);
-   
+
    DBID_DB2 = DBI.registerDriver("db2", methods, DBI_DB2_CAPS);
 
    return 0;
