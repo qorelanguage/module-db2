@@ -5,7 +5,7 @@
 
   Qore Programming Language
 
-  Copyright 2009 Qore Technologies, sro
+  Copyright 2009 - 2010 Qore Technologies, sro
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -109,7 +109,7 @@ public:
    DLLLOCAL AbstractQoreNode *getValue(const QoreEncoding *enc, ExceptionSink *xsink) const;
    DLLLOCAL int doValue(const QoreEncoding *enc, ExceptionSink *xsink) {
       if (!l)
-	 l = new QoreListNode();
+	 l = new QoreListNode;
       l->push(getValue(enc, xsink));
       return *xsink ? -1 : 0;
    }
@@ -441,10 +441,16 @@ AbstractQoreNode *QoreDB2Column::getValue(const QoreEncoding *enc, ExceptionSink
 	 return new DateTimeNode(1970, 1, 1, buf.time.hour, buf.time.minute, buf.time.second);
 
       case SQL_TYPE_TIMESTAMP:
+#ifdef _QORE_HAS_TIME_ZONES
+	 return DateTimeNode::makeAbsolute(currentTZ(), 
+					   buf.timestamp->year, buf.timestamp->month, buf.timestamp->day,
+					   buf.timestamp->hour, buf.timestamp->minute, buf.timestamp->second,
+					   buf.timestamp->fraction / 1000);
+#else
 	 return new DateTimeNode(buf.timestamp->year, buf.timestamp->month, buf.timestamp->day,
 				 buf.timestamp->hour, buf.timestamp->minute, buf.timestamp->second,
 				 buf.timestamp->fraction / 1000000);
-
+#endif
       case SQL_BIT:
       case SQL_BINARY:
       case SQL_VARBINARY: {
