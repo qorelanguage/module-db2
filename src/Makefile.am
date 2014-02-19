@@ -16,4 +16,4 @@ endif
 
 install-exec-hook:
 	mv $(DESTDIR)$(libdir)/db2.$(MODULE_SUFFIX) $(DESTDIR)$(libdir)/db2-api-$(MODULE_API).qmod
-	rm -f $(DESTDIR)$(libdir)/db2.la $(libdir)/db2.a
+	rm -f $(DESTDIR)$(libdir)/db2.la $(DESTDIR)$(libdir)/db2.a
